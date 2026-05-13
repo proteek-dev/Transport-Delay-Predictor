@@ -29,6 +29,7 @@ dependencies = [
     "xgboost==2.1.2",
     "joblib==1.4.2",
     "numpy==1.26.4",
+    "boto3==1.35.49",
 ]
 
 [project.optional-dependencies]

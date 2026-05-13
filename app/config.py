@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     # Daily retrain time (UTC). 02:30 UTC = 12:30 AEST — well outside peak travel.
     model_retrain_hour_utc: int = 2
     model_retrain_minute_utc: int = 30
+    # When `model_s3_bucket` is non-empty, save_model uploads to S3 after writing
+    # locally and get_model pulls from S3 when the local cache is stale. Leave
+    # empty for local dev to keep the Docker named volume as the sole backend.
+    model_s3_bucket: str = ""
+    model_s3_key: str = "delay_predictor.joblib"
 
     @property
     def is_production(self) -> bool:
