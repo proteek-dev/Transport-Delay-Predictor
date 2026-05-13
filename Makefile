@@ -122,9 +122,9 @@ fmt: ## Auto-fix lint issues
 	$(COMPOSE) run --rm $(SERVICE_API) ruff format app tests
 
 .PHONY: test
-test: ## Run pytest
+test: env ## Run pytest
 	$(COMPOSE) run --rm -e APP_ENV=test $(SERVICE_API) pytest
 
 .PHONY: test-cov
-test-cov: ## Run pytest with coverage
+test-cov: env ## Run pytest with coverage
 	$(COMPOSE) run --rm -e APP_ENV=test $(SERVICE_API) pytest --cov=app --cov-report=term-missing
