@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 
 from app import __version__
-from app.api.routes import features, predictions, stops, trips, vehicles
+from app.api.routes import delays, features, predict, predictions, stops, trips, vehicles
 from app.api.routes.health import router as health_router
 from app.config import settings
 from app.core.database import dispose_engine
@@ -61,6 +61,8 @@ def create_app() -> FastAPI:
         return {"service": "transport-delay-predictor", "docs": "/docs"}
 
     app.include_router(health_router)
+    app.include_router(predict.router)
+    app.include_router(delays.router, prefix="/delays")
     app.include_router(stops.router, prefix="/api/v1/stops", tags=["stops"])
     app.include_router(trips.router, prefix="/api/v1/trips", tags=["trips"])
     app.include_router(vehicles.router, prefix="/api/v1/vehicles", tags=["vehicles"])
