@@ -45,6 +45,25 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.refresh_static_feed",
         "schedule": crontab(hour=f"*/{settings.gtfs_static_refresh_hours}", minute=5),
     },
+    # ---- feature pipeline ----
+    "poll-bom-weather": {
+        "task": "app.workers.tasks.poll_weather",
+        "schedule": float(settings.bom_poll_interval_seconds),
+    },
+    "sync-public-holidays": {
+        # Weekly on Monday 03:00 UTC — holidays change rarely; this is just a refresh.
+        "task": "app.workers.tasks.sync_holidays",
+        "schedule": crontab(day_of_week="mon", hour=3, minute=0),
+    },
+    "refresh-route-delay-stats": {
+        # Run shortly before rebuild so feature rows pick up fresh route history.
+        "task": "app.workers.tasks.refresh_route_stats",
+        "schedule": float(settings.feature_rebuild_interval_seconds),
+    },
+    "rebuild-training-features": {
+        "task": "app.workers.tasks.rebuild_features",
+        "schedule": float(settings.feature_rebuild_interval_seconds),
+    },
 }
 
 

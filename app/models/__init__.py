@@ -1,4 +1,5 @@
 from app.models.base import Base
+from app.models.features import RouteDelayStats, TrainingFeature
 from app.models.gtfs_static import (
     Agency,
     Calendar,
@@ -8,8 +9,10 @@ from app.models.gtfs_static import (
     StopTime,
     Trip,
 )
+from app.models.holidays import PublicHoliday
 from app.models.observations import DelayObservation
 from app.models.realtime import StopTimeUpdate, TripUpdate, VehiclePosition
+from app.models.weather import WeatherObservation
 
 __all__ = [
     "Base",
@@ -24,4 +27,8 @@ __all__ = [
     "TripUpdate",
     "StopTimeUpdate",
     "DelayObservation",
+    "WeatherObservation",
+    "PublicHoliday",
+    "RouteDelayStats",
+    "TrainingFeature",
 ]

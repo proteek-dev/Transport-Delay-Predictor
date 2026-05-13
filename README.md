@@ -89,6 +89,41 @@ Open the API:
 | `GET` | `/api/v1/predictions?route_id=&stop_id=&target_time=` | Predicted delay (seconds) for a route/stop at a given time |
 | `POST` | `/api/v1/predictions` | Same prediction, JSON body |
 
+## Feature pipeline (for model training)
+
+Beyond the realtime predictor, a separate pipeline materializes a `training_features` table joining GTFS delay observations with calendar, weather, and route-history features. See [app/services/feature_pipeline.py](app/services/feature_pipeline.py).
+
+**Sources:**
+
+| Feature group | Table populated by | Schedule |
+| --- | --- | --- |
+| Delays + calendar (hour, day-of-week, month) | `delay_observations` (from GTFS-RT poller) | 60s |
+| Weather (air temp, rainfall, humidity) | `weather_observations` ← BOM `IDQ60901` JSON | 30 min |
+| Public holiday flag (QLD) | `public_holidays` ← Nager.Date `/api/v3/PublicHolidays/{year}/AU` | weekly |
+| Route-level history (avg, p50, p90) | `route_delay_stats` ← rolling 30d aggregate | every 6h |
+| Joined output | `training_features` ← INSERT…SELECT…ON CONFLICT | every 6h |
+
+**Output columns** (`training_features`): `observation_id`, `route_id`, `trip_id`, `stop_id`, `observed_at`, `service_date`, `hour_of_day`, `day_of_week`, `is_weekend`, `is_public_holiday`, `month`, `air_temp_c`, `rainfall_mm`, `humidity_pct`, `route_avg_delay_30d_s`, `route_p50_delay_30d_s`, `route_p90_delay_30d_s`, `delay_seconds` (target), `materialized_at`.
+
+**Bootstrap & inspection:**
+
+```bash
+make sync-holidays      # seed public_holidays for current + next year
+make ingest-weather     # pull recent BOM observations
+make rebuild-features   # refresh route stats and materialize training_features
+make bootstrap-features # all three in order
+```
+
+API endpoints:
+- `GET /api/v1/features?route_id=…&since=…&limit=…` — browse feature rows
+- `POST /api/v1/features/refresh?window_days=…` — trigger the pipeline manually
+
+**Design notes:**
+
+- Weather rows are joined via a `LATERAL` averaging across the configured BOM stations in a ±90/30-minute window around each observation — robust to occasional missing readings at any one station.
+- The job is fully idempotent: `ON CONFLICT (observation_id) DO UPDATE` keeps derived columns fresh as weather/holiday/route-stats inputs evolve.
+- All windows are configurable: `FEATURE_WINDOW_DAYS`, `BOM_POLL_INTERVAL_SECONDS`, `FEATURE_REBUILD_INTERVAL_SECONDS`.
+
 ## How predictions work
 
 Each `TripUpdate.StopTimeUpdate` with a `delay` field gets flattened into a `delay_observations` row keyed by `(trip_id, stop_id, service_date)`. Predictions aggregate that table over a rolling window (default 14 days):
