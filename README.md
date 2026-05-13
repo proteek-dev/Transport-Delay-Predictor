@@ -96,16 +96,68 @@ Open the API:
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/health` | DB + Redis liveness probes |
+| `GET` | `/predict?route_id=&stop_id=&datetime=` | Point estimate + empirical confidence interval. Uses the trained XGBoost model when present, else the bucket mean. |
+| `GET` | `/delays/live?route_id=&stop_id=&limit=` | Current delays from the latest GTFS-RT snapshot |
 | `GET` | `/api/v1/stops` | List stops with optional fuzzy search (`?q=`) |
 | `GET` | `/api/v1/stops/nearby?lat=&lon=&radius_m=` | PostGIS `ST_DWithin` search |
 | `GET` | `/api/v1/stops/{stop_id}` | Single stop |
 | `GET` | `/api/v1/stops/{stop_id}/departures` | Upcoming scheduled departures enriched with realtime delay or model prediction |
 | `GET` | `/api/v1/trips/{trip_id}` | Trip + ordered stop_times |
 | `GET` | `/api/v1/vehicles?route_id=&bbox=` | Latest known position per vehicle |
-| `GET` | `/api/v1/predictions?route_id=&stop_id=&target_time=` | Predicted delay (seconds) for a route/stop at a given time |
+| `GET` | `/api/v1/predictions?route_id=&stop_id=&target_time=` | Bucketed predictor (legacy shape; no confidence interval). |
 | `POST` | `/api/v1/predictions` | Same prediction, JSON body |
 | `GET` | `/api/v1/features?route_id=&since=&limit=` | Browse `training_features` rows |
 | `POST` | `/api/v1/features/refresh?window_days=` | Trigger the feature pipeline on demand |
+
+### `GET /predict`
+
+Returns a point estimate of `delay_seconds` plus an empirical confidence interval:
+
+```json
+{
+  "route_id": "100-1234",
+  "stop_id": "10001",
+  "datetime": "2026-05-13T08:15:00+10:00",
+  "predicted_delay_seconds": 64,
+  "confidence_interval": {
+    "lower_seconds": 12,
+    "upper_seconds": 142,
+    "level": 0.8
+  },
+  "method": "ml_model",
+  "sample_size": 187,
+  "confidence": 0.82
+}
+```
+
+- `method` is one of `ml_model` (joblib loaded + bucket has enough samples), `bucket_mean`, `route_fallback`, or `no_data`.
+- `confidence_interval` is the empirical [p10, p90] from `delay_observations` for the same `(route_id, stop_id, hour_of_day, day_of_week)` bucket. `null` when the bucket has fewer than `PREDICTOR_MIN_OBSERVATIONS` rows.
+- The trained model artifact is reloaded transparently on file mtime change (no restart needed after `make train-model` finishes).
+
+### `GET /delays/live`
+
+Returns the most recent `StopTimeUpdate` rows from `trip_updates` within `snapshot_window_seconds` (default 90s) of the latest poll. `snapshot_at` is the anchor — `null` when no realtime data has landed yet.
+
+```json
+{
+  "snapshot_at": "2026-05-13T08:14:32Z",
+  "count": 2,
+  "delays": [
+    {
+      "trip_id": "12345",
+      "route_id": "100-1234",
+      "stop_id": "10001",
+      "stop_sequence": 4,
+      "arrival_delay_seconds": 45,
+      "departure_delay_seconds": 60,
+      "delay_seconds": 60,
+      "arrival_time": "2026-05-13T08:15:30Z",
+      "departure_time": "2026-05-13T08:16:00Z",
+      "recorded_at": "2026-05-13T08:14:32Z"
+    }
+  ]
+}
+```
 
 ## Feature pipeline (for model training)
 

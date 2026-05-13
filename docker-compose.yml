@@ -70,6 +70,7 @@ services:
       - ./alembic:/srv/alembic:ro
       - ./alembic.ini:/srv/alembic.ini:ro
       - ./tests:/srv/tests:ro
+      - model_data:/srv/models:ro
 
   worker:
     <<: *app-env
