@@ -3,27 +3,29 @@
 Production-grade public transport delay prediction API.
 
 - **Stack**: Python 3.11, FastAPI, SQLAlchemy 2 (async + asyncpg), PostgreSQL 16 + PostGIS, Redis 7, Celery, Docker Compose.
-- **Data**: [TransLink Queensland](https://gtfsrt.api.translink.com.au/) GTFS static + GTFS-Realtime (TripUpdates and VehiclePositions). Public, no auth required.
-- **What it does**: ingests static + realtime feeds on a schedule, exposes a REST API for stops/trips/vehicles, and serves delay predictions backed by a buckets-of-history estimator with realtime override.
+- **Data sources**:
+  - [TransLink Queensland](https://gtfsrt.api.translink.com.au/) GTFS static + GTFS-Realtime (TripUpdates, VehiclePositions). Public, no auth.
+  - [Bureau of Meteorology](http://www.bom.gov.au/) `IDQ60901` JSON observations for SEQ stations.
+  - [Nager.Date](https://date.nager.at) for Australian public holidays (national + QLD).
+- **What it does**: ingests static + realtime feeds on a schedule, serves delay predictions via a buckets-of-history estimator with realtime override, and materializes a feature table joining delays with calendar / weather / route-history context ready for downstream model training.
 
 ## Architecture
 
 ```
-                          ┌─────────────┐
-   GTFS-RT feeds  ───▶    │   Celery    │ ──▶ Postgres + PostGIS
-   (TransLink)            │  worker +   │
-                          │    beat     │
-                          └─────────────┘
-                                 │
-                                 ▼
-                          ┌─────────────┐    ┌───────┐
-   HTTP clients   ───▶    │   FastAPI   │ ◀──│ Redis │ (cache + broker)
+   TransLink GTFS-RT  ──┐
+   BOM SEQ weather    ──┼──▶  Celery worker + beat  ──▶  Postgres + PostGIS
+   Nager.Date QLD     ──┘                                     ▲
+                                                              │
+                          ┌─────────────┐    ┌───────┐        │
+   HTTP clients   ───▶    │   FastAPI   │ ◀──│ Redis │ ◀──────┘
                           └─────────────┘    └───────┘
+                                         (cache + Celery broker)
 ```
 
-- **API** (`app/main.py`) serves `/api/v1/{stops,trips,vehicles,predictions}` and `/health`.
-- **Worker** (`app/workers/`) runs four scheduled tasks: poll trip updates, poll vehicle positions, prune old realtime rows, refresh static GTFS daily.
+- **API** (`app/main.py`) serves `/api/v1/{stops,trips,vehicles,predictions,features}` and `/health`.
+- **Worker** (`app/workers/`) runs eight scheduled tasks: poll trip updates (60s), poll vehicle positions (60s), prune realtime rows (15m), refresh static GTFS (daily), poll BOM weather (30m), sync public holidays (weekly), refresh route delay stats (6h), rebuild training features (6h).
 - **Predictor** (`app/services/predictor.py`) computes the expected delay for a `(route_id, stop_id, hour, day_of_week)` bucket from `delay_observations`, with a route-wide fallback and Redis-cached results.
+- **Feature pipeline** (`app/services/feature_pipeline.py`) joins `delay_observations` with `weather_observations`, `public_holidays`, and `route_delay_stats` into a `training_features` table (one row per observation, `delay_seconds` is the label).
 
 ## Folder layout
 
@@ -32,13 +34,22 @@ Production-grade public transport delay prediction API.
 ├── app/
 │   ├── api/
 │   │   ├── deps.py                # FastAPI dependencies (DB session)
-│   │   └── routes/                # health, stops, trips, vehicles, predictions
+│   │   └── routes/                # health, stops, trips, vehicles, predictions, features
 │   ├── core/                      # database, redis, logging
-│   ├── models/                    # SQLAlchemy 2 ORM (static + realtime + observations)
+│   ├── models/                    # SQLAlchemy 2 ORM
+│   │   ├── gtfs_static.py         #   agencies, routes, stops, trips, stop_times, calendar(_dates)
+│   │   ├── realtime.py            #   vehicle_positions, trip_updates, stop_time_updates
+│   │   ├── observations.py        #   delay_observations (deduped trip×stop×day delays)
+│   │   ├── weather.py             #   weather_observations
+│   │   ├── holidays.py            #   public_holidays
+│   │   └── features.py            #   route_delay_stats, training_features
 │   ├── schemas/                   # Pydantic v2 request/response models
 │   ├── services/
 │   │   ├── gtfs_static.py         # zip download + upsert
 │   │   ├── gtfs_realtime.py       # protobuf parse + insert + observation extraction
+│   │   ├── bom_weather.py         # BOM IDQ60901 JSON fetch + parse
+│   │   ├── holidays.py            # Nager.Date /AU sync (national + AU-QLD)
+│   │   ├── feature_pipeline.py    # route stats refresh + training_features build
 │   │   ├── predictor.py           # delay prediction
 │   │   └── cache.py               # redis helpers
 │   ├── workers/
@@ -46,12 +57,15 @@ Production-grade public transport delay prediction API.
 │   │   └── tasks.py               # @shared_task wrappers
 │   ├── config.py                  # pydantic-settings
 │   └── main.py                    # FastAPI app factory
-├── alembic/                       # migrations (0001 = initial schema)
+├── alembic/                       # migrations
+│   └── versions/
+│       ├── 0001_initial_schema.py
+│       └── 0002_weather_holidays_features.py
 ├── docker/
 │   ├── api.Dockerfile
 │   ├── worker.Dockerfile
 │   └── postgres-init.sql          # enables postgis, pg_trgm, btree_gist
-├── tests/                         # pytest scaffold
+├── tests/                         # pytest scaffold (parsers + OpenAPI shape)
 ├── docker-compose.yml
 ├── Makefile
 ├── pyproject.toml
@@ -88,6 +102,8 @@ Open the API:
 | `GET` | `/api/v1/vehicles?route_id=&bbox=` | Latest known position per vehicle |
 | `GET` | `/api/v1/predictions?route_id=&stop_id=&target_time=` | Predicted delay (seconds) for a route/stop at a given time |
 | `POST` | `/api/v1/predictions` | Same prediction, JSON body |
+| `GET` | `/api/v1/features?route_id=&since=&limit=` | Browse `training_features` rows |
+| `POST` | `/api/v1/features/refresh?window_days=` | Trigger the feature pipeline on demand |
 
 ## Feature pipeline (for model training)
 
@@ -142,6 +158,7 @@ Run `make help` for the full list.
 build / pull / up / down / nuke / restart / ps / logs / logs-api / logs-worker
 migrate / migration m="msg" / downgrade / psql
 ingest-static / ingest-rt
+sync-holidays / ingest-weather / rebuild-features / bootstrap-features
 shell / lint / fmt / test / test-cov
 ```
 
@@ -149,10 +166,16 @@ shell / lint / fmt / test / test-cov
 
 All knobs live in `.env` (see `.env.example`). Highlights:
 
+- `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` — required; no defaults in `docker-compose.yml` or app config so no credentials ever land in version control.
 - `GTFS_RT_POLL_INTERVAL` — seconds between realtime polls (default 60).
 - `GTFS_STATIC_REFRESH_HOURS` — how often beat re-pulls the static zip.
 - `PREDICTOR_HISTORY_DAYS` — rolling window for the bucketed estimator.
 - `PREDICTOR_MIN_OBSERVATIONS` — threshold before falling back to route mean.
+- `BOM_STATION_IDS` — list of BOM station IDs to poll (default Brisbane + Brisbane Airport).
+- `BOM_USER_AGENT` — required; BOM rejects requests with default httpx user agents.
+- `BOM_POLL_INTERVAL_SECONDS` — weather poll cadence (default 30 min).
+- `FEATURE_WINDOW_DAYS` — trailing window for `route_delay_stats` and `training_features`.
+- `FEATURE_REBUILD_INTERVAL_SECONDS` — how often beat refreshes route stats + training features.
 
 ## Notes & gotchas
 
@@ -161,6 +184,8 @@ All knobs live in `.env` (see `.env.example`). Highlights:
 - **Static feed wipes `stop_times`** wholesale because trips can be renumbered between releases; agencies/routes/stops/trips are upserted via Postgres `ON CONFLICT`.
 - **Timezones**: TransLink agency timezone is `Australia/Brisbane` (UTC+10, no DST). All `DateTime` columns are stored in UTC; the predictor uses `hour`/`weekday` from the `target_time` you pass, so feed it agency-local time if you want bucket alignment.
 - **No auth on TransLink endpoints**, but be polite — the default 60s cadence is well under their published rate limits.
+- **BOM blocks default user agents**: the BOM JSON endpoint returns HTTP 403 to bare httpx/python requests, so `BOM_USER_AGENT` is required.
+- **Secrets**: no credentials are committed. `docker-compose.yml` uses the `${VAR:?error}` form for Postgres user/password/db, and `app/config.py` defaults for DB URLs are empty strings — `.env` is the single source of truth (`make env` seeds it from `.env.example`).
 
 ## Tests
 
@@ -169,4 +194,4 @@ make test          # full suite
 make test-cov      # with coverage
 ```
 
-Tests cover the GTFS parser (no DB) and the predictor confidence curve, plus an OpenAPI shape check against the live FastAPI app. Integration tests against PostGIS are scaffolded but left to the next iteration — point a test database at `APP_ENV=test` to add them.
+Tests cover the GTFS static parser, the BOM weather parser, the Nager.Date holidays parser, and the predictor confidence curve, plus an OpenAPI shape check against the live FastAPI app. Integration tests against PostGIS are scaffolded but left to the next iteration — point a test database at `APP_ENV=test` to add them.
