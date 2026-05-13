@@ -115,8 +115,8 @@ async def _ingest_frames(session: AsyncSession, frames: dict[str, pd.DataFrame])
     log.info("gtfs_static_upsert_agencies", count=len(frames["agency.txt"]))
     agencies = [
         {
-            "agency_id": row["agency_id"] or "default",
-            "name": row["agency_name"],
+            "agency_id": row.get("agency_id") or "default",
+            "name": row.get("agency_name") or "Unknown Agency",
             "url": row.get("agency_url") or None,
             "timezone": row.get("agency_timezone") or "Australia/Brisbane",
         }
