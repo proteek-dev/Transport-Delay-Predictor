@@ -56,6 +56,10 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
+    @app.get("/", include_in_schema=False)
+    async def _root() -> dict[str, str]:
+        return {"service": "transport-delay-predictor", "docs": "/docs"}
+
     app.include_router(health_router)
     app.include_router(stops.router, prefix="/api/v1/stops", tags=["stops"])
     app.include_router(trips.router, prefix="/api/v1/trips", tags=["trips"])
