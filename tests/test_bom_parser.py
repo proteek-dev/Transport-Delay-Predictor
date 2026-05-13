@@ -4,7 +4,6 @@ import datetime as dt
 
 from app.services.bom_weather import parse_observations
 
-
 _SAMPLE_PAYLOAD = {
     "observations": {
         "header": [{"name": "Brisbane"}],
