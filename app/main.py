@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 
 from app import __version__
-from app.api.routes import predictions, stops, trips, vehicles
+from app.api.routes import features, predictions, stops, trips, vehicles
 from app.api.routes.health import router as health_router
 from app.config import settings
 from app.core.database import dispose_engine
@@ -61,6 +61,7 @@ def create_app() -> FastAPI:
     app.include_router(trips.router, prefix="/api/v1/trips", tags=["trips"])
     app.include_router(vehicles.router, prefix="/api/v1/vehicles", tags=["vehicles"])
     app.include_router(predictions.router, prefix="/api/v1/predictions", tags=["predictions"])
+    app.include_router(features.router, prefix="/api/v1/features", tags=["features"])
 
     return app
 

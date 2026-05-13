@@ -87,6 +87,24 @@ ingest-rt: ## Trigger a one-shot GTFS-RT poll (trip updates + positions)
 	$(COMPOSE) exec $(SERVICE_WORKER) celery -A app.workers.celery_app call app.workers.tasks.poll_trip_updates
 	$(COMPOSE) exec $(SERVICE_WORKER) celery -A app.workers.celery_app call app.workers.tasks.poll_vehicle_positions
 
+# ---- Feature pipeline ----
+
+.PHONY: sync-holidays
+sync-holidays: ## Sync QLD public holidays (current + next year) from Nager.Date
+	$(COMPOSE) exec $(SERVICE_WORKER) celery -A app.workers.celery_app call app.workers.tasks.sync_holidays
+
+.PHONY: ingest-weather
+ingest-weather: ## Fetch BOM weather observations for the configured SEQ stations
+	$(COMPOSE) exec $(SERVICE_WORKER) celery -A app.workers.celery_app call app.workers.tasks.poll_weather
+
+.PHONY: rebuild-features
+rebuild-features: ## Refresh route delay stats and rebuild training_features
+	$(COMPOSE) exec $(SERVICE_WORKER) celery -A app.workers.celery_app call app.workers.tasks.refresh_route_stats
+	$(COMPOSE) exec $(SERVICE_WORKER) celery -A app.workers.celery_app call app.workers.tasks.rebuild_features
+
+.PHONY: bootstrap-features
+bootstrap-features: sync-holidays ingest-weather rebuild-features ## One-shot pipeline run from scratch
+
 # ---- Dev ----
 
 .PHONY: shell

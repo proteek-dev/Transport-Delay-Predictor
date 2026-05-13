@@ -68,7 +68,7 @@ make migrate       # apply alembic migrations (creates schema + extensions)
 make ingest-static # pull the SEQ GTFS zip and load agencies/routes/stops/trips/stop_times
 ```
 
-The beat container will start polling realtime feeds immediately on the cadence in `.env` (default 30s).
+The beat container will start polling realtime feeds immediately on the cadence in `.env` (default 60s).
 
 Open the API:
 
@@ -88,6 +88,41 @@ Open the API:
 | `GET` | `/api/v1/vehicles?route_id=&bbox=` | Latest known position per vehicle |
 | `GET` | `/api/v1/predictions?route_id=&stop_id=&target_time=` | Predicted delay (seconds) for a route/stop at a given time |
 | `POST` | `/api/v1/predictions` | Same prediction, JSON body |
+
+## Feature pipeline (for model training)
+
+Beyond the realtime predictor, a separate pipeline materializes a `training_features` table joining GTFS delay observations with calendar, weather, and route-history features. See [app/services/feature_pipeline.py](app/services/feature_pipeline.py).
+
+**Sources:**
+
+| Feature group | Table populated by | Schedule |
+| --- | --- | --- |
+| Delays + calendar (hour, day-of-week, month) | `delay_observations` (from GTFS-RT poller) | 60s |
+| Weather (air temp, rainfall, humidity) | `weather_observations` ← BOM `IDQ60901` JSON | 30 min |
+| Public holiday flag (QLD) | `public_holidays` ← Nager.Date `/api/v3/PublicHolidays/{year}/AU` | weekly |
+| Route-level history (avg, p50, p90) | `route_delay_stats` ← rolling 30d aggregate | every 6h |
+| Joined output | `training_features` ← INSERT…SELECT…ON CONFLICT | every 6h |
+
+**Output columns** (`training_features`): `observation_id`, `route_id`, `trip_id`, `stop_id`, `observed_at`, `service_date`, `hour_of_day`, `day_of_week`, `is_weekend`, `is_public_holiday`, `month`, `air_temp_c`, `rainfall_mm`, `humidity_pct`, `route_avg_delay_30d_s`, `route_p50_delay_30d_s`, `route_p90_delay_30d_s`, `delay_seconds` (target), `materialized_at`.
+
+**Bootstrap & inspection:**
+
+```bash
+make sync-holidays      # seed public_holidays for current + next year
+make ingest-weather     # pull recent BOM observations
+make rebuild-features   # refresh route stats and materialize training_features
+make bootstrap-features # all three in order
+```
+
+API endpoints:
+- `GET /api/v1/features?route_id=…&since=…&limit=…` — browse feature rows
+- `POST /api/v1/features/refresh?window_days=…` — trigger the pipeline manually
+
+**Design notes:**
+
+- Weather rows are joined via a `LATERAL` averaging across the configured BOM stations in a ±90/30-minute window around each observation — robust to occasional missing readings at any one station.
+- The job is fully idempotent: `ON CONFLICT (observation_id) DO UPDATE` keeps derived columns fresh as weather/holiday/route-stats inputs evolve.
+- All windows are configurable: `FEATURE_WINDOW_DAYS`, `BOM_POLL_INTERVAL_SECONDS`, `FEATURE_REBUILD_INTERVAL_SECONDS`.
 
 ## How predictions work
 
@@ -114,7 +149,7 @@ shell / lint / fmt / test / test-cov
 
 All knobs live in `.env` (see `.env.example`). Highlights:
 
-- `GTFS_RT_POLL_INTERVAL` — seconds between realtime polls (default 30).
+- `GTFS_RT_POLL_INTERVAL` — seconds between realtime polls (default 60).
 - `GTFS_STATIC_REFRESH_HOURS` — how often beat re-pulls the static zip.
 - `PREDICTOR_HISTORY_DAYS` — rolling window for the bucketed estimator.
 - `PREDICTOR_MIN_OBSERVATIONS` — threshold before falling back to route mean.
@@ -125,7 +160,7 @@ All knobs live in `.env` (see `.env.example`). Highlights:
 - **Vehicle positions write-heavy**: `vehicle_positions` is append-only; the `prune_realtime` beat task drops rows older than 6h. Long-term retention lives in `delay_observations`.
 - **Static feed wipes `stop_times`** wholesale because trips can be renumbered between releases; agencies/routes/stops/trips are upserted via Postgres `ON CONFLICT`.
 - **Timezones**: TransLink agency timezone is `Australia/Brisbane` (UTC+10, no DST). All `DateTime` columns are stored in UTC; the predictor uses `hour`/`weekday` from the `target_time` you pass, so feed it agency-local time if you want bucket alignment.
-- **No auth on TransLink endpoints**, but be polite — the default 30s cadence is well under their published rate limits.
+- **No auth on TransLink endpoints**, but be polite — the default 60s cadence is well under their published rate limits.
 
 ## Tests
 

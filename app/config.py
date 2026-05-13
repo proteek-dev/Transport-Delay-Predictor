@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     gtfs_rt_alerts_url: HttpUrl = (  # type: ignore[assignment]
         "https://gtfsrt.api.translink.com.au/api/realtime/SEQ/Alerts"
     )
-    gtfs_rt_poll_interval: int = 30
+    gtfs_rt_poll_interval: int = 60
     gtfs_static_refresh_hours: int = 24
     gtfs_request_timeout_seconds: float = 30.0
 
@@ -55,6 +55,22 @@ class Settings(BaseSettings):
     predictor_history_days: int = 14
     predictor_min_observations: int = 5
     predictor_cache_ttl_seconds: int = 60
+
+    # ---- BOM weather ----
+    # Default to Brisbane (city + airport) — both report half-hourly observations.
+    bom_station_ids: list[str] = Field(default_factory=lambda: ["94576", "94578"])
+    # BOM blocks default httpx user-agents with HTTP 403; supply something descriptive.
+    bom_user_agent: str = (
+        "transport-delay-predictor/0.1 (+https://github.com/proteek-dev/Transport-Delay-Predictor)"
+    )
+    bom_poll_interval_seconds: int = 1800  # 30 min — matches BOM cadence
+
+    # ---- Public holidays (Nager.Date) ----
+    nager_holidays_url: HttpUrl = "https://date.nager.at/api/v3"  # type: ignore[assignment]
+
+    # ---- Feature pipeline ----
+    feature_window_days: int = 30
+    feature_rebuild_interval_seconds: int = 21600  # 6 hours
 
     @property
     def is_production(self) -> bool:

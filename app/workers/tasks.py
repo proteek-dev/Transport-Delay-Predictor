@@ -6,12 +6,18 @@ from typing import Any
 from celery import shared_task
 
 from app.core.logging import get_logger
+from app.services.bom_weather import ingest_weather
+from app.services.feature_pipeline import (
+    rebuild_training_features,
+    refresh_route_delay_stats,
+)
 from app.services.gtfs_realtime import (
     ingest_trip_updates,
     ingest_vehicle_positions,
     prune_old_realtime,
 )
 from app.services.gtfs_static import ingest_static_feed
+from app.services.holidays import sync_qld_holidays
 
 log = get_logger(__name__)
 
@@ -55,3 +61,33 @@ def refresh_static_feed(self) -> None:
     except Exception as exc:
         log.exception("refresh_static_feed_failed", error=str(exc))
         raise self.retry(exc=exc, countdown=300)
+
+
+# ---- Feature pipeline ----
+
+@shared_task(name="app.workers.tasks.poll_weather", bind=True, max_retries=3)
+def poll_weather(self) -> int:
+    try:
+        return _run(ingest_weather())
+    except Exception as exc:
+        log.exception("poll_weather_failed", error=str(exc))
+        raise self.retry(exc=exc, countdown=60)
+
+
+@shared_task(name="app.workers.tasks.sync_holidays", bind=True, max_retries=2)
+def sync_holidays(self) -> int:
+    try:
+        return _run(sync_qld_holidays())
+    except Exception as exc:
+        log.exception("sync_holidays_failed", error=str(exc))
+        raise self.retry(exc=exc, countdown=300)
+
+
+@shared_task(name="app.workers.tasks.refresh_route_stats")
+def refresh_route_stats() -> int:
+    return _run(refresh_route_delay_stats())
+
+
+@shared_task(name="app.workers.tasks.rebuild_features")
+def rebuild_features() -> int:
+    return _run(rebuild_training_features())
