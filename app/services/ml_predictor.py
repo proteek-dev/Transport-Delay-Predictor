@@ -175,6 +175,17 @@ def train_and_evaluate(df: pd.DataFrame) -> tuple[Pipeline, TrainingMetrics]:
 def save_model(pipeline: Pipeline, metrics: TrainingMetrics, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump({"pipeline": pipeline, "metrics": asdict(metrics)}, path)
+    if settings.model_s3_bucket:
+        _upload_to_s3(path, settings.model_s3_bucket, settings.model_s3_key)
+
+
+def _upload_to_s3(path: Path, bucket: str, key: str) -> None:
+    """Upload the joblib to S3. Lazy boto3 import so local dev isn't forced to install it."""
+    import boto3  # noqa: PLC0415 - keep boto3 optional at import time
+
+    s3 = boto3.client("s3")
+    s3.upload_file(str(path), bucket, key)
+    log.info("ml_model_uploaded_s3", bucket=bucket, key=key)
 
 
 def load_model(path: Path) -> tuple[Pipeline, dict[str, Any]]:

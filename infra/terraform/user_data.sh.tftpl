@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Provisioning script for the API/worker host. Runs once at first boot under cloud-init.
+# Idempotent: re-running by hand should be safe.
+set -euo pipefail
+exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
+
+REGION="${region}"
+PROJECT="${project_name}"
+ENV="${environment}"
+ECR_REGISTRY="${ecr_registry}"
+ECR_API_REPO="${ecr_api_repo}"
+ECR_WORKER_REPO="${ecr_worker_repo}"
+MODEL_S3_BUCKET="${model_s3_bucket}"
+DB_HOST="${db_host}"
+DB_PORT="${db_port}"
+DB_NAME="${db_name}"
+DB_USER="${db_user}"
+REPO_URL="${repo_url}"
+
+# ---- Packages ----
+dnf install -y docker git jq amazon-ssm-agent
+
+# ---- Docker daemon ----
+systemctl enable --now docker
+usermod -a -G docker ec2-user || true
+
+# Docker Compose v2 plugin (Amazon Linux 2023 doesn't ship it by default).
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose \
+  https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# ---- Application working directory ----
+APP_DIR=/opt/$PROJECT
+mkdir -p "$APP_DIR" /srv/models
+chown -R ec2-user:ec2-user "$APP_DIR" /srv/models
+
+# Clone the repo so we have docker-compose.aws.yml and the deploy script.
+if [ ! -d "$APP_DIR/.git" ]; then
+  sudo -u ec2-user git clone "$REPO_URL" "$APP_DIR"
+else
+  cd "$APP_DIR" && sudo -u ec2-user git pull --ff-only
+fi
+
+# ---- Render .env from SSM secrets ----
+DB_PASSWORD=$(aws ssm get-parameter --with-decryption --region "$REGION" \
+  --name "/$PROJECT/$ENV/db/password" --query Parameter.Value --output text)
+
+cat >"$APP_DIR/.env" <<ENV
+APP_ENV=production
+APP_LOG_LEVEL=INFO
+
+POSTGRES_HOST=$DB_HOST
+POSTGRES_PORT=$DB_PORT
+POSTGRES_DB=$DB_NAME
+POSTGRES_USER=$DB_USER
+POSTGRES_PASSWORD=$DB_PASSWORD
+DATABASE_URL=postgresql+asyncpg://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME
+DATABASE_SYNC_URL=postgresql+psycopg://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME
+
+REDIS_URL=redis://redis:6379/0
+CELERY_BROKER_URL=redis://redis:6379/1
+CELERY_RESULT_BACKEND=redis://redis:6379/2
+
+GTFS_RT_POLL_INTERVAL=60
+GTFS_STATIC_REFRESH_HOURS=24
+
+MODEL_ARTIFACT_PATH=/srv/models/delay_predictor.joblib
+MODEL_S3_BUCKET=$MODEL_S3_BUCKET
+MODEL_S3_KEY=delay_predictor.joblib
+
+ECR_REGISTRY=$ECR_REGISTRY
+ECR_API_REPO=$ECR_API_REPO
+ECR_WORKER_REPO=$ECR_WORKER_REPO
+IMAGE_TAG=latest
+ENV
+chown ec2-user:ec2-user "$APP_DIR/.env"
+chmod 600 "$APP_DIR/.env"
+
+# ---- ECR login + first pull + up ----
+aws ecr get-login-password --region "$REGION" \
+  | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+cd "$APP_DIR"
+# The compose file may not exist on the very first boot if the deploy hasn't
+# run yet — that's fine, the GH Actions deploy will start it.
+if [ -f docker-compose.aws.yml ]; then
+  docker compose -f docker-compose.aws.yml pull || true
+  docker compose -f docker-compose.aws.yml up -d || true
+fi
+
+# ---- Enable PostGIS on the freshly provisioned RDS ----
+POSTGIS_SQL=$(aws ssm get-parameter --region "$REGION" \
+  --name "/$PROJECT/$ENV/db/postgis_init_sql" --query Parameter.Value --output text)
+PGPASSWORD="$DB_PASSWORD" timeout 60 docker run --rm --network host \
+  -e PGPASSWORD postgres:16-alpine \
+  psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "$POSTGIS_SQL" || true

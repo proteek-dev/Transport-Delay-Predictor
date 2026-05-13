@@ -41,3 +41,20 @@ data/
 # Logs
 *.log
 logs/
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+.terraform.lock.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Trained ML artefacts (stored in the docker volume / S3, never the repo)
+*.joblib

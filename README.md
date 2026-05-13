@@ -67,15 +67,22 @@ Production-grade public transport delay prediction API.
 │   ├── api.Dockerfile
 │   ├── worker.Dockerfile
 │   └── postgres-init.sql          # enables postgis, pg_trgm, btree_gist
+├── infra/
+│   ├── terraform/                 # AWS free-tier stack (EC2 + RDS + S3 + ECR + IAM OIDC)
+│   └── scripts/deploy.sh          # invoked on the EC2 via SSM by the deploy workflow
+├── .github/workflows/
+│   ├── ci.yml                     # ruff + mypy + pytest on PR / push
+│   └── deploy.yml                 # build + push to ECR, SSM-deploy on push to main
 ├── tests/                         # pytest scaffold (parsers + OpenAPI shape)
-├── docker-compose.yml
+├── docker-compose.yml             # local dev (builds locally, postgres in-cluster)
+├── docker-compose.aws.yml         # prod (pulls ECR images, external RDS)
 ├── Makefile
 ├── pyproject.toml
 ├── alembic.ini
 └── .env.example
 ```
 
-## Quick start
+## Quick start (local dev)
 
 ```bash
 make build         # build the api + worker images
@@ -85,6 +92,35 @@ make ingest-static # pull the SEQ GTFS zip and load agencies/routes/stops/trips/
 ```
 
 The beat container will start polling realtime feeds immediately on the cadence in `.env` (default 60s).
+
+## Deploying to AWS (free tier)
+
+The `infra/terraform/` directory provisions a complete free-tier stack: EC2 `t2.micro` running the Docker compose stack, RDS `db.t3.micro` (Postgres 16 + PostGIS), an S3 bucket for trained model artefacts, two ECR repositories for the API and worker images, and a GitHub OIDC role so CI can deploy without long-lived AWS keys.
+
+```bash
+cd infra/terraform
+terraform init
+terraform apply
+```
+
+After `apply` succeeds, copy the `github_actions_role_arn` and `ec2_instance_id` outputs into the GitHub repo secrets:
+
+| Secret | Source |
+| --- | --- |
+| `AWS_DEPLOY_ROLE_ARN` | `terraform output -raw github_actions_role_arn` |
+| `AWS_EC2_INSTANCE_ID` | `terraform output -raw ec2_instance_id` |
+
+Pushing to `main` then triggers `.github/workflows/deploy.yml`, which:
+
+1. Authenticates to AWS via OIDC (no static keys).
+2. Builds `api` and `worker` images and pushes them to ECR (tagged with the short Git SHA + `latest`).
+3. Invokes `infra/scripts/deploy.sh` on the EC2 host via SSM Run Command — pulls the new images, runs `alembic upgrade head`, and brings up the compose stack with zero SSH.
+
+The EC2 host runs `docker-compose.aws.yml` (no local Postgres, points at RDS, persists model joblibs to the S3 bucket). See [infra/terraform/README.md](infra/terraform/README.md) for variables, costs, and teardown notes.
+
+## CI
+
+`.github/workflows/ci.yml` runs `ruff`, `mypy`, and `pytest` on every PR and push. The mypy step is non-gating until the strict-mode debt is paid down.
 
 Open the API:
 
@@ -273,6 +309,7 @@ All knobs live in `.env` (see `.env.example`). Highlights:
 - `MODEL_TEST_SIZE` — `train_test_split` test fraction (default 0.2).
 - `MODEL_N_ESTIMATORS` / `MODEL_MAX_DEPTH` / `MODEL_LEARNING_RATE` — XGBoost hyperparameters.
 - `MODEL_RETRAIN_HOUR_UTC` / `MODEL_RETRAIN_MINUTE_UTC` — daily retrain time (default 02:30 UTC = 12:30 AEST).
+- `MODEL_S3_BUCKET` / `MODEL_S3_KEY` — when `MODEL_S3_BUCKET` is set, `save_model` uploads the joblib to S3 after the local write and `get_model` pulls from S3 with ETag-based caching. Leave `MODEL_S3_BUCKET` empty (the default) for local dev — the Docker named volume stays the only backend.
 
 ## Notes & gotchas
 
