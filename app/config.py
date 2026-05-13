@@ -8,11 +8,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # `protected_namespaces=()` lets us keep MODEL_* env vars without Pydantic
+    # warning that `model_artifact_path` etc. shadow its `model_*` API
+    # (model_dump, model_validate, …). The fields are env-driven, not BaseModel
+    # methods, so the collision is purely cosmetic.
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        protected_namespaces=(),
     )
 
     # ---- App ----
