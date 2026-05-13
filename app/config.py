@@ -23,7 +23,9 @@ class Settings(BaseSettings):
     # ---- App ----
     app_env: Literal["development", "test", "production"] = "development"
     app_log_level: str = "INFO"
-    app_host: str = "0.0.0.0"
+    # Containerised: bind to all interfaces so docker port mapping works.
+    # The host network boundary is enforced by docker / the EC2 SG, not by uvicorn.
+    app_host: str = "0.0.0.0"  # noqa: S104
     app_port: int = 8000
     app_cors_origins: list[str] = Field(default_factory=list)
 

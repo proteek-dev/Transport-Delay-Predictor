@@ -64,8 +64,8 @@ def _get_from_s3() -> tuple[Pipeline, dict[str, Any]] | None:
     key = settings.model_s3_key
     path = Path(settings.model_artifact_path)
 
-    import boto3  # noqa: PLC0415 - keep boto3 optional at module import time
-    from botocore.exceptions import ClientError  # noqa: PLC0415
+    import boto3
+    from botocore.exceptions import ClientError
 
     s3 = boto3.client("s3")
     try:

@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DBSession
-from app.models import Stop, StopTime, Trip
+from app.models import Stop, Trip
 from app.schemas.trip import StopTimeOut, TripDetailOut, TripOut
 
 router = APIRouter()

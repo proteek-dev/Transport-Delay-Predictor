@@ -181,7 +181,7 @@ def save_model(pipeline: Pipeline, metrics: TrainingMetrics, path: Path) -> None
 
 def _upload_to_s3(path: Path, bucket: str, key: str) -> None:
     """Upload the joblib to S3. Lazy boto3 import so local dev isn't forced to install it."""
-    import boto3  # noqa: PLC0415 - keep boto3 optional at import time
+    import boto3
 
     s3 = boto3.client("s3")
     s3.upload_file(str(path), bucket, key)
