@@ -2,12 +2,12 @@
 
 Production-grade public transport delay prediction API.
 
-- **Stack**: Python 3.11, FastAPI, SQLAlchemy 2 (async + asyncpg), PostgreSQL 16 + PostGIS, Redis 7, Celery, Docker Compose.
+- **Stack**: Python 3.11, FastAPI, SQLAlchemy 2 (async + asyncpg), PostgreSQL 16 + PostGIS, Redis 7, Celery, Docker Compose. ML: scikit-learn + XGBoost, persisted via joblib.
 - **Data sources**:
   - [TransLink Queensland](https://gtfsrt.api.translink.com.au/) GTFS static + GTFS-Realtime (TripUpdates, VehiclePositions). Public, no auth.
   - [Bureau of Meteorology](http://www.bom.gov.au/) `IDQ60901` JSON observations for SEQ stations.
   - [Nager.Date](https://date.nager.at) for Australian public holidays (national + QLD).
-- **What it does**: ingests static + realtime feeds on a schedule, serves delay predictions via a buckets-of-history estimator with realtime override, and materializes a feature table joining delays with calendar / weather / route-history context ready for downstream model training.
+- **What it does**: ingests static + realtime feeds on a schedule, serves delay predictions via a buckets-of-history estimator with realtime override, materializes a feature table joining delays with calendar / weather / route-history context, and trains a daily-refreshed XGBoost regressor on top for richer point estimates.
 
 ## Architecture
 
@@ -23,9 +23,10 @@ Production-grade public transport delay prediction API.
 ```
 
 - **API** (`app/main.py`) serves `/api/v1/{stops,trips,vehicles,predictions,features}` and `/health`.
-- **Worker** (`app/workers/`) runs eight scheduled tasks: poll trip updates (60s), poll vehicle positions (60s), prune realtime rows (15m), refresh static GTFS (daily), poll BOM weather (30m), sync public holidays (weekly), refresh route delay stats (6h), rebuild training features (6h).
+- **Worker** (`app/workers/`) runs nine scheduled tasks: poll trip updates (60s), poll vehicle positions (60s), prune realtime rows (15m), refresh static GTFS (daily), poll BOM weather (30m), sync public holidays (weekly), refresh route delay stats (6h), rebuild training features (6h), retrain XGBoost delay model (daily 02:30 UTC).
 - **Predictor** (`app/services/predictor.py`) computes the expected delay for a `(route_id, stop_id, hour, day_of_week)` bucket from `delay_observations`, with a route-wide fallback and Redis-cached results.
 - **Feature pipeline** (`app/services/feature_pipeline.py`) joins `delay_observations` with `weather_observations`, `public_holidays`, and `route_delay_stats` into a `training_features` table (one row per observation, `delay_seconds` is the label).
+- **ML model** (`app/services/ml_predictor.py`) trains a scikit-learn pipeline (OrdinalEncoder + XGBRegressor) on `training_features`, evaluates RMSE on a held-out split, and serializes the fitted pipeline to disk via joblib. Celery beat retrains every 24 hours.
 
 ## Folder layout
 
@@ -50,6 +51,7 @@ Production-grade public transport delay prediction API.
 │   │   ├── bom_weather.py         # BOM IDQ60901 JSON fetch + parse
 │   │   ├── holidays.py            # Nager.Date /AU sync (national + AU-QLD)
 │   │   ├── feature_pipeline.py    # route stats refresh + training_features build
+│   │   ├── ml_predictor.py        # sklearn + XGBoost trainer, joblib persistence
 │   │   ├── predictor.py           # delay prediction
 │   │   └── cache.py               # redis helpers
 │   ├── workers/
@@ -148,7 +150,43 @@ Each `TripUpdate.StopTimeUpdate` with a `delay` field gets flattened into a `del
 2. **Route fallback**: route-wide mean if the bucket is sparse — half-weighted confidence.
 3. **No data**: returns `0` with `confidence = 0`.
 
-Results are cached in Redis for 60s (configurable via `PREDICTOR_CACHE_TTL_SECONDS`). This is intentionally a transparent baseline — swap `app/services/predictor.py` for a gradient-boosted or RNN model once you have enough observations to train one.
+Results are cached in Redis for 60s (configurable via `PREDICTOR_CACHE_TTL_SECONDS`). This is intentionally a transparent baseline — the gradient-boosted alternative below trains directly on the same feature table.
+
+## ML model (XGBoost)
+
+A scikit-learn pipeline in [app/services/ml_predictor.py](app/services/ml_predictor.py) trains an XGBoost regressor on the `training_features` table and serializes it to `/srv/models/delay_predictor.joblib` (a named Docker volume so the artifact survives container restarts).
+
+**Features**: `(route_id, stop_id, hour_of_day, day_of_week, weather_condition)`, where `weather_condition` is bucketed from `rainfall_mm` (`clear` / `light_rain` >0.2 mm / `heavy_rain` >2 mm / `unknown` for NULL).
+
+**Pipeline shape**:
+
+```
+ColumnTransformer
+  ├── OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
+  │       on [route_id, stop_id, weather_condition]
+  └── passthrough on [hour_of_day, day_of_week]
+        ↓
+XGBRegressor(objective='reg:squarederror', tree_method='hist',
+             n_estimators=400, max_depth=6, learning_rate=0.05)
+```
+
+**Training run** (`make train-model`, or daily at `MODEL_RETRAIN_HOUR_UTC:MODEL_RETRAIN_MINUTE_UTC`):
+
+1. Pull the trailing `MODEL_TRAINING_WINDOW_DAYS` of rows from `training_features`.
+2. `train_test_split(test_size=MODEL_TEST_SIZE, random_state=42)`.
+3. Fit pipeline, compute RMSE on both splits, log metrics via structlog.
+4. `joblib.dump({pipeline, metrics}, MODEL_ARTIFACT_PATH)`.
+
+If the available sample count is below `MODEL_MIN_TRAINING_SAMPLES` (default 200), the task logs a warning and skips — no half-trained artifact is written.
+
+**Inference**: `predict_single(pipeline, route_id=…, stop_id=…, hour=…, day_of_week=…, weather_condition=…)` returns a float. Unseen `route_id`/`stop_id`/`weather_condition` values degrade gracefully via the `-1` sentinel rather than raising at predict time.
+
+**Bootstrap**:
+
+```bash
+make bootstrap-features   # ensure training_features has rows
+make train-model          # fit + serialize the joblib
+```
 
 ## Make targets
 
@@ -159,6 +197,7 @@ build / pull / up / down / nuke / restart / ps / logs / logs-api / logs-worker
 migrate / migration m="msg" / downgrade / psql
 ingest-static / ingest-rt
 sync-holidays / ingest-weather / rebuild-features / bootstrap-features
+train-model
 shell / lint / fmt / test / test-cov
 ```
 
@@ -176,6 +215,12 @@ All knobs live in `.env` (see `.env.example`). Highlights:
 - `BOM_POLL_INTERVAL_SECONDS` — weather poll cadence (default 30 min).
 - `FEATURE_WINDOW_DAYS` — trailing window for `route_delay_stats` and `training_features`.
 - `FEATURE_REBUILD_INTERVAL_SECONDS` — how often beat refreshes route stats + training features.
+- `MODEL_ARTIFACT_PATH` — where the trained joblib lands (default `/srv/models/delay_predictor.joblib`, backed by the `model_data` Docker volume).
+- `MODEL_TRAINING_WINDOW_DAYS` — trailing window of `training_features` used for fitting.
+- `MODEL_MIN_TRAINING_SAMPLES` — skip retraining if fewer rows are available (default 200).
+- `MODEL_TEST_SIZE` — `train_test_split` test fraction (default 0.2).
+- `MODEL_N_ESTIMATORS` / `MODEL_MAX_DEPTH` / `MODEL_LEARNING_RATE` — XGBoost hyperparameters.
+- `MODEL_RETRAIN_HOUR_UTC` / `MODEL_RETRAIN_MINUTE_UTC` — daily retrain time (default 02:30 UTC = 12:30 AEST).
 
 ## Notes & gotchas
 
@@ -194,4 +239,4 @@ make test          # full suite
 make test-cov      # with coverage
 ```
 
-Tests cover the GTFS static parser, the BOM weather parser, the Nager.Date holidays parser, and the predictor confidence curve, plus an OpenAPI shape check against the live FastAPI app. Integration tests against PostGIS are scaffolded but left to the next iteration — point a test database at `APP_ENV=test` to add them.
+Tests cover the GTFS static parser, the BOM weather parser, the Nager.Date holidays parser, the predictor confidence curve, the ML pipeline (weather bucketing, train/test/joblib roundtrip, unseen-category robustness), and an OpenAPI shape check against the live FastAPI app. Integration tests against PostGIS are scaffolded but left to the next iteration — point a test database at `APP_ENV=test` to add them.
