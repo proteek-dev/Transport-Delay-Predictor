@@ -38,7 +38,7 @@ def poll_trip_updates(self) -> int:
         return _run(ingest_trip_updates())
     except Exception as exc:
         log.exception("poll_trip_updates_failed", error=str(exc))
-        raise self.retry(exc=exc, countdown=5)
+        raise self.retry(exc=exc, countdown=5) from exc
 
 
 @shared_task(name="app.workers.tasks.poll_vehicle_positions", bind=True, max_retries=3)
@@ -47,7 +47,7 @@ def poll_vehicle_positions(self) -> int:
         return _run(ingest_vehicle_positions())
     except Exception as exc:
         log.exception("poll_vehicle_positions_failed", error=str(exc))
-        raise self.retry(exc=exc, countdown=5)
+        raise self.retry(exc=exc, countdown=5) from exc
 
 
 @shared_task(name="app.workers.tasks.prune_realtime")
@@ -61,7 +61,7 @@ def refresh_static_feed(self) -> None:
         _run(ingest_static_feed())
     except Exception as exc:
         log.exception("refresh_static_feed_failed", error=str(exc))
-        raise self.retry(exc=exc, countdown=300)
+        raise self.retry(exc=exc, countdown=300) from exc
 
 
 # ---- Feature pipeline ----
@@ -72,7 +72,7 @@ def poll_weather(self) -> int:
         return _run(ingest_weather())
     except Exception as exc:
         log.exception("poll_weather_failed", error=str(exc))
-        raise self.retry(exc=exc, countdown=60)
+        raise self.retry(exc=exc, countdown=60) from exc
 
 
 @shared_task(name="app.workers.tasks.sync_holidays", bind=True, max_retries=2)
@@ -81,7 +81,7 @@ def sync_holidays(self) -> int:
         return _run(sync_qld_holidays())
     except Exception as exc:
         log.exception("sync_holidays_failed", error=str(exc))
-        raise self.retry(exc=exc, countdown=300)
+        raise self.retry(exc=exc, countdown=300) from exc
 
 
 @shared_task(name="app.workers.tasks.refresh_route_stats")
@@ -102,4 +102,4 @@ def retrain_delay_model(self) -> dict[str, Any]:
         return _run(train_delay_model())
     except Exception as exc:
         log.exception("retrain_delay_model_failed", error=str(exc))
-        raise self.retry(exc=exc, countdown=600)
+        raise self.retry(exc=exc, countdown=600) from exc
