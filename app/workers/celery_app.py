@@ -64,6 +64,16 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.rebuild_features",
         "schedule": float(settings.feature_rebuild_interval_seconds),
     },
+    # ---- ML model ----
+    "retrain-delay-model": {
+        # Daily retrain off-peak — features refresh every 6h, so a 24h cadence
+        # gives the rebuild plenty of time to populate fresh rows.
+        "task": "app.workers.tasks.retrain_delay_model",
+        "schedule": crontab(
+            hour=settings.model_retrain_hour_utc,
+            minute=settings.model_retrain_minute_utc,
+        ),
+    },
 }
 
 

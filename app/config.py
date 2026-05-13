@@ -72,6 +72,18 @@ class Settings(BaseSettings):
     feature_window_days: int = 30
     feature_rebuild_interval_seconds: int = 21600  # 6 hours
 
+    # ---- ML model (XGBoost delay predictor) ----
+    model_artifact_path: str = "/srv/models/delay_predictor.joblib"
+    model_training_window_days: int = 30
+    model_min_training_samples: int = 200
+    model_test_size: float = 0.2
+    model_n_estimators: int = 400
+    model_max_depth: int = 6
+    model_learning_rate: float = 0.05
+    # Daily retrain time (UTC). 02:30 UTC = 12:30 AEST — well outside peak travel.
+    model_retrain_hour_utc: int = 2
+    model_retrain_minute_utc: int = 30
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"

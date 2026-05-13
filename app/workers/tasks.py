@@ -18,6 +18,7 @@ from app.services.gtfs_realtime import (
 )
 from app.services.gtfs_static import ingest_static_feed
 from app.services.holidays import sync_qld_holidays
+from app.services.ml_predictor import train_delay_model
 
 log = get_logger(__name__)
 
@@ -91,3 +92,14 @@ def refresh_route_stats() -> int:
 @shared_task(name="app.workers.tasks.rebuild_features")
 def rebuild_features() -> int:
     return _run(rebuild_training_features())
+
+
+# ---- ML model retraining ----
+
+@shared_task(name="app.workers.tasks.retrain_delay_model", bind=True, max_retries=1)
+def retrain_delay_model(self) -> dict[str, Any]:
+    try:
+        return _run(train_delay_model())
+    except Exception as exc:
+        log.exception("retrain_delay_model_failed", error=str(exc))
+        raise self.retry(exc=exc, countdown=600)

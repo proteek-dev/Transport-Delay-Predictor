@@ -105,6 +105,12 @@ rebuild-features: ## Refresh route delay stats and rebuild training_features
 .PHONY: bootstrap-features
 bootstrap-features: sync-holidays ingest-weather rebuild-features ## One-shot pipeline run from scratch
 
+# ---- ML model ----
+
+.PHONY: train-model
+train-model: ## Train + serialize the XGBoost delay predictor on training_features
+	$(COMPOSE) exec $(SERVICE_WORKER) celery -A app.workers.celery_app call app.workers.tasks.retrain_delay_model
+
 # ---- Dev ----
 
 .PHONY: shell
