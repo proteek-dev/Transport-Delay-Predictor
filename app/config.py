@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     gtfs_rt_alerts_url: HttpUrl = (  # type: ignore[assignment]
         "https://gtfsrt.api.translink.com.au/api/realtime/SEQ/Alerts"
     )
-    gtfs_rt_poll_interval: int = 30
+    gtfs_rt_poll_interval: int = 60
     gtfs_static_refresh_hours: int = 24
     gtfs_request_timeout_seconds: float = 30.0
 

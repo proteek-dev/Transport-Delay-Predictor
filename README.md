@@ -68,7 +68,7 @@ make migrate       # apply alembic migrations (creates schema + extensions)
 make ingest-static # pull the SEQ GTFS zip and load agencies/routes/stops/trips/stop_times
 ```
 
-The beat container will start polling realtime feeds immediately on the cadence in `.env` (default 30s).
+The beat container will start polling realtime feeds immediately on the cadence in `.env` (default 60s).
 
 Open the API:
 
@@ -114,7 +114,7 @@ shell / lint / fmt / test / test-cov
 
 All knobs live in `.env` (see `.env.example`). Highlights:
 
-- `GTFS_RT_POLL_INTERVAL` — seconds between realtime polls (default 30).
+- `GTFS_RT_POLL_INTERVAL` — seconds between realtime polls (default 60).
 - `GTFS_STATIC_REFRESH_HOURS` — how often beat re-pulls the static zip.
 - `PREDICTOR_HISTORY_DAYS` — rolling window for the bucketed estimator.
 - `PREDICTOR_MIN_OBSERVATIONS` — threshold before falling back to route mean.
@@ -125,7 +125,7 @@ All knobs live in `.env` (see `.env.example`). Highlights:
 - **Vehicle positions write-heavy**: `vehicle_positions` is append-only; the `prune_realtime` beat task drops rows older than 6h. Long-term retention lives in `delay_observations`.
 - **Static feed wipes `stop_times`** wholesale because trips can be renumbered between releases; agencies/routes/stops/trips are upserted via Postgres `ON CONFLICT`.
 - **Timezones**: TransLink agency timezone is `Australia/Brisbane` (UTC+10, no DST). All `DateTime` columns are stored in UTC; the predictor uses `hour`/`weekday` from the `target_time` you pass, so feed it agency-local time if you want bucket alignment.
-- **No auth on TransLink endpoints**, but be polite — the default 30s cadence is well under their published rate limits.
+- **No auth on TransLink endpoints**, but be polite — the default 60s cadence is well under their published rate limits.
 
 ## Tests
 
