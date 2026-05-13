@@ -23,8 +23,10 @@ class Settings(BaseSettings):
     app_cors_origins: list[str] = Field(default_factory=list)
 
     # ---- DB ----
-    database_url: str = "postgresql+asyncpg://tdp:tdp@postgres:5432/tdp"
-    database_sync_url: str = "postgresql+psycopg://tdp:tdp@postgres:5432/tdp"
+    # No defaults: credentials must come from .env so no literal password is
+    # committed (GitGuardian flags hardcoded connection strings).
+    database_url: str = ""
+    database_sync_url: str = ""
     db_pool_size: int = 10
     db_max_overflow: int = 20
     db_pool_recycle_seconds: int = 1800

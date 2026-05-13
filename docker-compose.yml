@@ -15,10 +15,14 @@ services:
   postgres:
     image: postgis/postgis:16-3.4
     restart: unless-stopped
+    # Postgres credentials are sourced exclusively from .env so no literal
+    # password ever lands in version control (GitGuardian flags compose defaults
+    # like `${POSTGRES_PASSWORD:-...}` as hardcoded secrets). `make env` seeds
+    # .env from .env.example on first run.
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-tdp}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tdp}
-      POSTGRES_DB: ${POSTGRES_DB:-tdp}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
     ports:
       - "5432:5432"
     volumes:

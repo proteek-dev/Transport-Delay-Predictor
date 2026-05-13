@@ -73,8 +73,8 @@ downgrade: ## Roll back one migration
 	$(COMPOSE) run --rm $(SERVICE_API) alembic downgrade -1
 
 .PHONY: psql
-psql: ## Open a psql shell against the running db
-	$(COMPOSE) exec $(SERVICE_DB) psql -U $${POSTGRES_USER:-tdp} -d $${POSTGRES_DB:-tdp}
+psql: ## Open a psql shell against the running db (reads creds from .env)
+	$(COMPOSE) --env-file .env exec $(SERVICE_DB) sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
 
 # ---- GTFS ingestion ----
 
