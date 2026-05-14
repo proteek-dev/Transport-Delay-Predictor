@@ -337,3 +337,5 @@ make test-cov      # with coverage
 ```
 
 Tests cover the GTFS static parser, the BOM weather parser, the Nager.Date holidays parser, the predictor confidence curve, the ML pipeline (weather bucketing, train/test/joblib roundtrip, unseen-category robustness), and an OpenAPI shape check against the live FastAPI app. Integration tests against PostGIS are scaffolded but left to the next iteration — point a test database at `APP_ENV=test` to add them.
+
+------
