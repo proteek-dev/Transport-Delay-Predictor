@@ -93,30 +93,38 @@ make ingest-static # pull the SEQ GTFS zip and load agencies/routes/stops/trips/
 
 The beat container will start polling realtime feeds immediately on the cadence in `.env` (default 60s).
 
-## Deploying to AWS (free tier)
+## AWS Setup (Console)
 
-The `infra/terraform/` directory provisions a complete free-tier stack: EC2 `t2.micro` running the Docker compose stack, RDS `db.t3.micro` (Postgres 16 + PostGIS), an S3 bucket for trained model artefacts, two ECR repositories for the API and worker images, and a GitHub OIDC role so CI can deploy without long-lived AWS keys.
+The deploy pipeline (`.github/workflows/deploy.yml`) targets a hand-provisioned AWS stack — there is no IaC committed to this repo. Create the six resources below in the AWS Console (once), populate the five GitHub repository entries, then every push to `main` builds, pushes to ECR, and SSM-deploys onto the EC2 host.
 
-```bash
-cd infra/terraform
-terraform init
-terraform apply
-```
+### AWS resources to create
 
-After `apply` succeeds, copy the `github_actions_role_arn` and `ec2_instance_id` outputs into the GitHub repo secrets:
+| # | Resource | Notes |
+| --- | --- | --- |
+| 1 | **EC2 instance** (`t2.micro`, Amazon Linux 2023) | Place in the default VPC's public subnet. Attach an EC2 security group allowing inbound TCP 80 and 8000 from `0.0.0.0/0`. Attach the IAM instance profile from row 5. Install Docker + the Compose v2 plugin, clone the repo to `/opt/transport-delay-predictor`, and write `/opt/transport-delay-predictor/.env` (DB URLs, `MODEL_S3_BUCKET`, `ECR_REGISTRY`, etc.). |
+| 2 | **RDS PostgreSQL** (`db.t3.micro`, Postgres 16) | Single-AZ, 20 GB gp2, encrypted, **not** publicly accessible. Attach a security group allowing TCP 5432 **only** from the EC2 security group. After provisioning, connect with `psql` and run `CREATE EXTENSION postgis; CREATE EXTENSION pg_trgm; CREATE EXTENSION btree_gist;`. |
+| 3 | **S3 bucket** for model artefacts | Block all public access, enable SSE-S3 (AES256), enable versioning, add a lifecycle rule expiring non-current versions after 30 days. The value of this bucket's name goes into the EC2's `.env` as `MODEL_S3_BUCKET`. |
+| 4 | **ECR repositories** ×2 | Names: `transport-delay-predictor/api` and `transport-delay-predictor/worker`. Add an identical lifecycle policy on each that expires all but the 5 most recent images (otherwise you'll blow through the 500 MB free-tier storage). |
+| 5 | **IAM role for the EC2 instance** | Trust policy: `ec2.amazonaws.com`. Permissions: AWS-managed `AmazonSSMManagedInstanceCore`, plus an inline policy granting `ecr:GetAuthorizationToken` + `ecr:BatchGetImage` + `ecr:GetDownloadUrlForLayer` (`*`), and `s3:GetObject`/`s3:PutObject`/`s3:ListBucket` scoped to the bucket from row 3. Create an instance profile that wraps this role and attach it to the EC2 in row 1. |
+| 6 | **IAM OIDC identity provider + role** for GitHub Actions | Provider URL: `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`. Create a role with a trust policy that conditions on `repo:<owner>/<repo>:ref:refs/heads/main`. Permissions: `ecr:GetAuthorizationToken` + the full ECR push set (`BatchCheckLayerAvailability`, `CompleteLayerUpload`, `InitiateLayerUpload`, `PutImage`, `UploadLayerPart`, `BatchGetImage`) on `*`, plus `ssm:SendCommand` / `ssm:GetCommandInvocation` on `*`. |
 
-| Secret | Source |
-| --- | --- |
-| `AWS_DEPLOY_ROLE_ARN` | `terraform output -raw github_actions_role_arn` |
-| `AWS_EC2_INSTANCE_ID` | `terraform output -raw ec2_instance_id` |
+### GitHub repository entries
 
-Pushing to `main` then triggers `.github/workflows/deploy.yml`, which:
+In the GitHub repo, open **Settings → Secrets and variables → Actions** and add these five entries. The first two live on the **Secrets** tab; the rest on the **Variables** tab.
 
-1. Authenticates to AWS via OIDC (no static keys).
-2. Builds `api` and `worker` images and pushes them to ECR (tagged with the short Git SHA + `latest`).
-3. Invokes `infra/scripts/deploy.sh` on the EC2 host via SSM Run Command — pulls the new images, runs `alembic upgrade head`, and brings up the compose stack with zero SSH.
+| # | Name | Tab | Required? | Where to get the value |
+| --- | --- | --- | --- | --- |
+| 1 | `AWS_DEPLOY_ROLE_ARN` | Secrets | **Required** | ARN of the IAM role from resource 6. The workflow assumes it via OIDC — no static AWS keys ever leave AWS. |
+| 2 | `AWS_EC2_INSTANCE_ID` | Secrets | **Required** | `i-…` instance ID of the EC2 from resource 1. Used as the `--instance-ids` target for `aws ssm send-command`. |
+| 3 | `AWS_REGION` | Variables | Recommended | The region your stack lives in (e.g. `us-east-1`). `deploy.yml` falls back to `us-east-1` if unset, but set it explicitly to avoid surprises. |
+| 4 | `AWS_ACCOUNT_ID` | Variables | Recommended | Your 12-digit AWS account ID. The workflow currently derives it via `sts get-caller-identity`; storing it makes diagnostics and manual ECR pulls easier. |
+| 5 | `EC2_PUBLIC_HOSTNAME` | Variables | Recommended | Public DNS or IP of the EC2 instance. Used for post-deploy smoke checks (`curl http://$EC2_PUBLIC_HOSTNAME/health`). Not consumed by `deploy.yml` directly. |
 
-The EC2 host runs `docker-compose.aws.yml` (no local Postgres, points at RDS, persists model joblibs to the S3 bucket). See [infra/terraform/README.md](infra/terraform/README.md) for variables, costs, and teardown notes.
+Once both lists are populated, the next push to `main` will:
+
+1. Assume the OIDC role and log into ECR.
+2. Build `api` and `worker` images and push them tagged with the short Git SHA + `latest`.
+3. Invoke `infra/scripts/deploy.sh` on the EC2 host via SSM — pulls the new images, runs `alembic upgrade head`, brings up `docker-compose.aws.yml`, no SSH required.
 
 ## CI
 
