@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+echo "ECR_REGISTRY=${ECR_REGISTRY}"
+echo "ECR_API_REPO=${ECR_API_REPO}"
+echo "ECR_WORKER_REPO=${ECR_WORKER_REPO}"
+echo "IMAGE_TAG=${IMAGE_TAG}"
 # Invoked on the EC2 host via SSM SendCommand from the deploy workflow.
 # Expects ECR_REGISTRY, ECR_API_REPO, ECR_WORKER_REPO, IMAGE_TAG, AWS_REGION
 # to be present in the environment (the GH Actions workflow injects them
