@@ -16,7 +16,7 @@ sudo git pull --ff-only
 # Update IMAGE_TAG in .env so docker compose picks up the new build.
 sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=${IMAGE_TAG}|" .env || echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
 
-/usr/local/bin/aws ecr get-login-password --region ${AWS_REGION} \
+aws ecr get-login-password --region ${AWS_REGION} \
   | sudo docker login --username AWS --password-stdin ${ECR_REGISTRY}
 
 sudo docker compose -f docker-compose.aws.yml pull
