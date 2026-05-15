@@ -89,7 +89,15 @@ jobs:
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploy ${IMAGE_TAG}" \
-            --parameters "commands=[\"AWS_REGION=${AWS_REGION} ECR_REGISTRY=${REGISTRY} ECR_API_REPO=${PROJECT_NAME}/api ECR_WORKER_REPO=${PROJECT_NAME}/worker IMAGE_TAG=${IMAGE_TAG} bash /opt/${PROJECT_NAME}/infra/scripts/deploy.sh\"]" \
+            --parameters "commands=[
+              \"export AWS_REGION=${AWS_REGION}\",
+              \"export ECR_REGISTRY=${REGISTRY}\",
+              \"export ECR_API_REPO=${PROJECT_NAME}/api\",
+              \"export ECR_WORKER_REPO=${PROJECT_NAME}/worker\",
+              \"export IMAGE_TAG=${IMAGE_TAG}\",
+              \"export PROJECT_NAME=${PROJECT_NAME}\",
+              \"bash /opt/${PROJECT_NAME}/infra/scripts/deploy.sh\"
+            ]" \
             --query 'Command.CommandId' --output text)
 
           echo "SSM command ID: $CMD_ID"
