@@ -85,19 +85,30 @@ jobs:
           set -euo pipefail
           REGISTRY=$(aws sts get-caller-identity --query 'Account' --output text).dkr.ecr.${AWS_REGION}.amazonaws.com
 
+          # SSM AWS-RunShellScript runs each array element in its own subshell,
+          # so `export` lines split across elements get lost before the script
+          # reads them. Build the full deploy as a single multiline shell string
+          # and submit it as ONE element so every export is in scope when
+          # /opt/.../deploy.sh runs.
+          DEPLOY_CMD="export AWS_REGION=${AWS_REGION}
+          export ECR_REGISTRY=${REGISTRY}
+          export ECR_API_REPO=${PROJECT_NAME}/api
+          export ECR_WORKER_REPO=${PROJECT_NAME}/worker
+          export IMAGE_TAG=${IMAGE_TAG}
+          export PROJECT_NAME=${PROJECT_NAME}
+          bash /opt/${PROJECT_NAME}/infra/scripts/deploy.sh"
+
+          # jq does the JSON-escaping so newlines / quotes / commas in
+          # $DEPLOY_CMD don't break AWS CLI's shorthand parser. Bash-quoting
+          # `commands=["$DEPLOY_CMD"]` directly drops the inner quotes during
+          # word splitting and the shorthand parser then rejects it.
+          PARAMS=$(jq -nc --arg cmd "$DEPLOY_CMD" '{commands: [$cmd]}')
+
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploy ${IMAGE_TAG}" \
-            --parameters "commands=[
-              \"export AWS_REGION=${AWS_REGION}\",
-              \"export ECR_REGISTRY=${REGISTRY}\",
-              \"export ECR_API_REPO=${PROJECT_NAME}/api\",
-              \"export ECR_WORKER_REPO=${PROJECT_NAME}/worker\",
-              \"export IMAGE_TAG=${IMAGE_TAG}\",
-              \"export PROJECT_NAME=${PROJECT_NAME}\",
-              \"bash /opt/${PROJECT_NAME}/infra/scripts/deploy.sh\"
-            ]" \
+            --parameters "$PARAMS" \
             --query 'Command.CommandId' --output text)
 
           echo "SSM command ID: $CMD_ID"
