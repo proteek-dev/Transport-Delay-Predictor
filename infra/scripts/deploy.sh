@@ -17,8 +17,19 @@ sudo git fetch --all --prune
 sudo git checkout main
 sudo git pull --ff-only
 
-# Update IMAGE_TAG in .env so docker compose picks up the new build.
-sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=${IMAGE_TAG}|" .env || echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
+# Write ECR vars + IMAGE_TAG into .env so docker compose can resolve image
+# references. sudo resets the process environment (Defaults env_reset in
+# sudoers), so these vars must come from the file, not the process env.
+for kv in \
+  "ECR_REGISTRY=${ECR_REGISTRY}" \
+  "ECR_API_REPO=${ECR_API_REPO}" \
+  "ECR_WORKER_REPO=${ECR_WORKER_REPO}" \
+  "IMAGE_TAG=${IMAGE_TAG}"; do
+  key="${kv%%=*}"
+  grep -q "^${key}=" .env 2>/dev/null \
+    && sed -i "s|^${key}=.*|${kv}|" .env \
+    || echo "${kv}" >> .env
+done
 
 aws ecr get-login-password --region ${AWS_REGION} \
   | sudo -E docker login --username AWS --password-stdin ${ECR_REGISTRY}
